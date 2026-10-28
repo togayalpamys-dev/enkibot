@@ -5,18 +5,17 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ContentType
 from aiogram.filters import CommandStart
-from google import genai
-from google.genai import types
+from groq import Groq
 
 # ==========================================
-# КОНФИГУРАЦИЯ
+# КОНФИГУРАЦИЯ (Ключи полностью прописаны)
 # ==========================================
 TELEGRAM_BOT_TOKEN = "9211767291:AAE6yNL_C9S4sz5V5h-TsI62DFvDBXupi8I"
-GOOGLE_API_KEY = "AQ.Ab8RN6Jhk3LeUjqpI_xkXaLjKQlnEeq5ffxgmgG1o15UsOSOaw"
+GROQ_API_KEY = "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"
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
-ai_client = genai.Client(api_key=GOOGLE_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ==========================================
 # ФЕЙКОВЫЙ СЕРВЕР ДЛЯ ОБХОДА ПОРТА RENDER
@@ -28,7 +27,7 @@ def run_health_server():
     server.serve_forever()
 
 # ==========================================
-# ИНСТРУКЦИЯ ДЛЯ GEMINI (Системный промпт)
+# ИНСТРУКЦИЯ ДЛЯ ИИ LLAMA (Системный промпт)
 # ==========================================
 SYSTEM_INSTRUCTION = """
 Ты — строгий и опытный внутренний аудитор кирпичного завода "Енки" (Казахстан, Кокшетау). 
@@ -40,34 +39,41 @@ SYSTEM_INSTRUCTION = """
 
 Инструкция:
 Изучи переданный список товаров и их цен. Сравни указанные цены со своими знаниями о среднерыночных ценах в данном регионе (Казахстан/СНГ) для крупных производств.
-Выдай красивый текстовый отчет. Напиши по каждой позиции, завышена ли цена, какая средняя цена на рынке и краткий комментарий, почему это так. В конце сделай общий вывод.
-Выдавай ответ на русском языке. Используй эмодзи для наглядности (например, ⚠️ если завышено, ✅ если в норме).
+Выдай красивый, чёткий текстовый отчет на русском языке. 
+Напиши по каждой позиции, завышена ли цена, какая средняя цена на рынке в тенге (тг) и краткий комментарий, почему это так. В конце сделай общий аналитический вывод.
+Используй эмодзи для наглядности (например, ⚠️ если цена завышена, ✅ если в норме).
 """
 
 # ==========================================
-# ЛОГИКА ОБРАБОТКИ СООБЩЕНИЙ
+# ЛОГИКА ОБРАБОТКИ СООБЩЕНИЙ ЧЕРЕЗ GROQ
 # ==========================================
-def analyze_prices_with_gemini(input_text: str) -> str:
-    """Отправляет данные в Gemini напрямую и возвращает текстовый ответ."""
+def analyze_prices_with_groq(input_text: str) -> str:
+    """Отправляет данные в Groq API (Llama 3.1) и возвращает текстовый отчет."""
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-1.5-flash', # Стабильная и доступная базовая модель
-            contents=f"Проанализируй следующие данные закупок завода ENKI:\n\n{input_text}",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.3,
-            ),
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_INSTRUCTION
+                },
+                {
+                    "role": "user",
+                    "content": f"Проанализируй следующие данные закупок завода ENKI:\n\n{input_text}"
+                }
+            ],
+            model="llama-3.1-70b-versatile",
+            temperature=0.2,
         )
-        return response.text
+        return chat_completion.choices.message.content
     except Exception as e:
-        print(f"Ошибка ИИ: {e}")
+        print(f"Ошибка Groq API: {e}")
         return None
 
 # Хэндлер на команду /start
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
-        "🏭 **Добро пожаловать в систему аудита закупок кирпичного завода ENKI!**\n\n"
+        "🏭 **Добро пожаловать в систему аудита закупок кирпичного завода ENKI на движке Groq!**\n\n"
         "Отправьте мне текст со списком материалов и цен (например: *'HDMI кабель - 9000 тг за штуку'*), "
         "и я мгновенно проверю, не завысил ли снабженец стоимость."
     )
@@ -75,16 +81,15 @@ async def cmd_start(message: Message):
 # Хэндлер на текстовые сообщения
 @dp.message(F.content_type == ContentType.TEXT)
 async def handle_text_audit(message: Message):
-    status_msg = await message.answer("🔄 *Анализирую цены и проверяю рынок... Пожалуйста, подождите.*", parse_mode="Markdown")
+    status_msg = await message.answer("🔄 *Связываюсь со сверхбыстрыми серверами Groq, проверяю рынок... Пожалуйста, подождите.*", parse_mode="Markdown")
     
-    report_text = analyze_prices_with_gemini(message.text)
+    report_text = analyze_prices_with_groq(message.text)
     
     if not report_text:
-        await status_msg.edit_text("❌ Не удалось получить ответ от ИИ. Попробуйте отправить запрос еще раз.")
+        await status_msg.edit_text("❌ Не удалось получить ответ от аналитического сервера. Попробуйте еще раз.")
         return
 
     await status_msg.delete()
-    # Отправляем напрямую готовый красивый текст от нейросети
     await message.answer(report_text)
 
 # ==========================================
@@ -94,9 +99,8 @@ async def main():
     server_thread = Thread(target=run_health_server, daemon=True)
     server_thread.start()
     
-    print("Запуск polling Telegram бота...")
+    print("Запуск Telegram бота через Groq...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
