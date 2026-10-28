@@ -53,7 +53,7 @@ SYSTEM_INSTRUCTION = """
 def analyze_prices_with_gemini(input_text: str) -> AuditReport:
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-1.5-flash',
             contents=f"Проанализируй цены:\n\n{input_text}",
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
