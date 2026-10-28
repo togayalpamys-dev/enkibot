@@ -7,7 +7,6 @@ from aiogram.types import Message, ContentType
 from aiogram.filters import CommandStart
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
 
 # ==========================================
 # КОНФИГУРАЦИЯ
@@ -23,84 +22,81 @@ ai_client = genai.Client(api_key=GOOGLE_API_KEY)
 # ФЕЙКОВЫЙ СЕРВЕР ДЛЯ ОБХОДА ПОРТА RENDER
 # ==========================================
 def run_health_server():
-    # Render автоматически передает номер порта в переменную окружения PORT
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     print(f"Фейковый веб-сервер запущен на порту {port}")
     server.serve_forever()
 
 # ==========================================
-# СТРУКТУРА ДАННЫХ И ПРОМПТ
+# ИНСТРУКЦИЯ ДЛЯ GEMINI (Системный промпт)
 # ==========================================
-class ItemAnalysis(BaseModel):
-    item_name: str = Field(description="Название позиции")
-    purchase_price: float = Field(description="Заявленная цена")
-    market_average_price: float = Field(description="Среднерыночная цена")
-    is_overpriced: bool = Field(description="Завышена ли")
-    deviation_percent: float = Field(description="Процент завышения")
-    comment: str = Field(description="Комментарий")
-
-class AuditReport(BaseModel):
-    items: list[ItemAnalysis]
-    summary: str = Field(description="Общий вывод")
-
 SYSTEM_INSTRUCTION = """
-Ты — строгий внутренний аудитор кирпичного завода "Енки" (Казахстан, Кокшетау). 
-Твоя задача — анализировать цены закупок и выявлять факты завышения стоимости.
-Выдай результат строго в формате JSON по схеме AuditReport.
+Ты — строгий и опытный внутренний аудитор кирпичного завода "Енки" (Казахстан, Кокшетау). 
+Твоя задача — анализировать цены закупок, которые предоставляет снабженец, и выявлять факты завышения стоимости материалов и оборудования.
+
+Контекст завода:
+- Завод производит высококачественный облицовочный кирпич (завод ENKI).
+- Основное сырье: глина, песок, технологические добавки, упаковочные материалы (поддоны, термоусадочная пленка), запчасти для оборудования (пресс-формы, конвейерные ленты, редукторы), ГСМ, уголь/газ для обжиговых печей.
+
+Инструкция:
+Изучи переданный список товаров и их цен. Сравни указанные цены со своими знаниями о среднерыночных ценах в данном регионе (Казахстан/СНГ) для крупных производств.
+Выдай красивый текстовый отчет. Напиши по каждой позиции, завышена ли цена, какая средняя цена на рынке и краткий комментарий, почему это так. В конце сделай общий вывод.
+Выдавай ответ на русском языке. Используй эмодзи для наглядности (например, ⚠️ если завышено, ✅ если в норме).
 """
 
-def analyze_prices_with_gemini(input_text: str) -> AuditReport:
+# ==========================================
+# ЛОГИКА ОБРАБОТКИ СООБЩЕНИЙ
+# ==========================================
+def analyze_prices_with_gemini(input_text: str) -> str:
+    """Отправляет данные в Gemini напрямую и возвращает текстовый ответ."""
     try:
         response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=f"Проанализируй цены:\n\n{input_text}",
+            model='gemini-1.5-flash', # Стабильная и доступная базовая модель
+            contents=f"Проанализируй следующие данные закупок завода ENKI:\n\n{input_text}",
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=AuditReport,
-                temperature=0.2,
+                temperature=0.3,
             ),
         )
-        return AuditReport.model_validate_json(response.text)
+        return response.text
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
         return None
 
+# Хэндлер на команду /start
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    await message.answer("🏭 Система аудита завода ENKI успешно запущена в облаке Render! Отправьте список материалов и цен.")
+    await message.answer(
+        "🏭 **Добро пожаловать в систему аудита закупок кирпичного завода ENKI!**\n\n"
+        "Отправьте мне текст со списком материалов и цен (например: *'HDMI кабель - 9000 тг за штуку'*), "
+        "и я мгновенно проверю, не завысил ли снабженец стоимость."
+    )
 
+# Хэндлер на текстовые сообщения
 @dp.message(F.content_type == ContentType.TEXT)
 async def handle_text_audit(message: Message):
-    status_msg = await message.answer("🔄 Анализирую рынок, сверяю базы данных региона...")
-    report: AuditReport = analyze_prices_with_gemini(message.text)
+    status_msg = await message.answer("🔄 *Анализирую цены и проверяю рынок... Пожалуйста, подождите.*", parse_mode="Markdown")
     
-    if not report:
-        await status_msg.edit_text("❌ Ошибка обработки данных искусственным интеллектом.")
+    report_text = analyze_prices_with_gemini(message.text)
+    
+    if not report_text:
+        await status_msg.edit_text("❌ Не удалось получить ответ от ИИ. Попробуйте отправить запрос еще раз.")
         return
 
-    res = "📊 **РЕЗУЛЬТАТЫ ПРОВЕРКИ ЗАКУПКИ:**\n\n"
-    for item in report.items:
-        emoji = "⚠️" if item.is_overpriced else "✅"
-        res += (f"{emoji} **{item.item_name}**\n"
-                f" ├ Заявлено снабженцем: {item.purchase_price} тг\n"
-                f" ├ Среднерыночная цена: {item.market_average_price} тг\n"
-                f" ├ Отклонение: {item.deviation_percent}%\n"
-                f" └ Анализ аудитора: {item.comment}\n\n")
-    
-    res += f"📝 **Итоговое заключение:** {report.summary}"
     await status_msg.delete()
-    await message.answer(res)
+    # Отправляем напрямую готовый красивый текст от нейросети
+    await message.answer(report_text)
 
+# ==========================================
+# ЗАПУСК БОТА
+# ==========================================
 async def main():
-    # Запускаем веб-сервер в отдельном потоке, чтобы он не мешал боту слушать чат
     server_thread = Thread(target=run_health_server, daemon=True)
     server_thread.start()
     
-    # Запуск самого бота
     print("Запуск polling Telegram бота...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
