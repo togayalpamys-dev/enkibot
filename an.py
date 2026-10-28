@@ -7,6 +7,7 @@ from aiogram.types import Message, ContentType
 from aiogram.filters import CommandStart
 from groq import Groq
 
+
 # ==========================================
 # КОНФИГУРАЦИЯ (Ключи полностью прописаны)
 # ==========================================
